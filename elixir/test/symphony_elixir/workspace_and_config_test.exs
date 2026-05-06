@@ -1188,6 +1188,30 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "app_server config defaults to codex kind" do
+    config = %{}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.kind == "codex"
+  end
+
+  test "app_server config kind=claude_code accepted" do
+    config = %{"app_server" => %{"kind" => "claude_code", "command" => "claude-app-server"}}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.kind == "claude_code"
+    assert settings.app_server.command == "claude-app-server"
+  end
+
+  test "app_server config rejects unknown kind" do
+    config = %{"app_server" => %{"kind" => "gpt"}}
+    assert {:error, _} = Schema.parse(config)
+  end
+
+  test "legacy codex.command merges into app_server.command when app_server.command is nil" do
+    config = %{"codex" => %{"command" => "codex app-server"}}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.command == "codex app-server"
+  end
+
   test "path safety returns errors for invalid path segments" do
     invalid_segment = String.duplicate("a", 300)
     path = Path.join(System.tmp_dir!(), invalid_segment)

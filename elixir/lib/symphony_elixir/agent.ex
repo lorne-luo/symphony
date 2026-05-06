@@ -18,10 +18,7 @@ defmodule SymphonyElixir.Agent do
   end
 
   defp agent_kind do
-    # Check test override first, then real config
-    # NOTE: We'll wire to Config properly in SDK-2 when agent config block exists
-    # For now, use a simple Application env override for tests
     Application.get_env(:symphony_elixir, :agent_kind_override) ||
-      "codex"
+      SymphonyElixir.Config.settings!().app_server.kind
   end
 end

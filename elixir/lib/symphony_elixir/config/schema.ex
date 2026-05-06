@@ -165,6 +165,30 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule AppServer do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:kind, :string, default: "codex")
+      field(:command, :string)
+      field(:approval_policy, :string, default: "on-request")
+      field(:thread_sandbox, :string, default: "workspace-write")
+      field(:turn_sandbox_policy, :map, default: %{})
+      field(:max_turns, :integer, default: 6)
+    end
+
+    def changeset(s, attrs) do
+      s
+      |> cast(attrs, [:kind, :command, :approval_policy, :thread_sandbox,
+                      :turn_sandbox_policy, :max_turns], empty_values: [])
+      |> validate_inclusion(:kind, ["codex", "claude_code"],
+           message: "must be \"codex\" or \"claude_code\"")
+    end
+  end
+
   defmodule Codex do
     @moduledoc false
     use Ecto.Schema
@@ -282,6 +306,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:app_server, AppServer, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
@@ -374,6 +399,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
+    |> cast_embed(:app_server, with: &AppServer.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
@@ -414,7 +440,20 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    app_server =
+      settings.app_server
+      |> then(fn a ->
+        case a.command do
+          nil when not is_nil(settings.codex.command) ->
+            %{a | command: settings.codex.command,
+                  approval_policy: normalize_keys(settings.codex.approval_policy),
+                  thread_sandbox: settings.codex.thread_sandbox,
+                  turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)}
+          _ -> a
+        end
+      end)
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, app_server: app_server}
   end
 
   defp normalize_keys(value) when is_map(value) do
