@@ -12,10 +12,6 @@ defmodule SymphonyElixir.Jira.Client do
   @issue_page_size 50
   @search_fields "summary,description,priority,status,assignee,labels,issuelinks,created,updated"
 
-  # ---------------------------------------------------------------------------
-  # Public API
-  # ---------------------------------------------------------------------------
-
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
     tracker = settings().tracker
@@ -96,17 +92,9 @@ defmodule SymphonyElixir.Jira.Client do
     do_request(method, path, body, [])
   end
 
-  # ---------------------------------------------------------------------------
-  # Test helpers (not part of the public Tracker API)
-  # ---------------------------------------------------------------------------
-
   @doc false
   @spec normalize_issue_for_test(map()) :: Issue.t() | nil
   def normalize_issue_for_test(issue) when is_map(issue), do: normalize_issue(issue)
-
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
 
   defp do_fetch_all(jql, start_at, acc) do
     params = %{
@@ -121,13 +109,13 @@ defmodule SymphonyElixir.Jira.Client do
     case do_request(:get, path, nil, []) do
       {:ok, %{"issues" => issues, "total" => total}} when is_list(issues) ->
         parsed = Enum.map(issues, &normalize_issue/1) |> Enum.reject(&is_nil/1)
-        updated_acc = acc ++ parsed
+        updated_acc = prepend_page_issues(parsed, acc)
         fetched_so_far = start_at + length(issues)
 
         if fetched_so_far < total and length(issues) > 0 do
           do_fetch_all(jql, fetched_so_far, updated_acc)
         else
-          {:ok, updated_acc}
+          {:ok, finalize_paginated_issues(updated_acc)}
         end
 
       {:ok, body} ->
@@ -138,6 +126,12 @@ defmodule SymphonyElixir.Jira.Client do
         {:error, reason}
     end
   end
+
+  defp prepend_page_issues(issues, acc) when is_list(issues) and is_list(acc) do
+    Enum.reverse(issues, acc)
+  end
+
+  defp finalize_paginated_issues(acc) when is_list(acc), do: Enum.reverse(acc)
 
   defp do_request(method, path, body, _opts) do
     tracker = settings().tracker
@@ -187,7 +181,7 @@ defmodule SymphonyElixir.Jira.Client do
       priority: parse_priority(get_in(fields, ["priority", "id"])),
       state: get_in(fields, ["status", "name"]),
       branch_name: build_branch_name(key, fields["summary"]),
-      url: nil,
+      url: "#{settings().tracker.endpoint}/browse/#{key}",
       assignee_id: get_in(fields, ["assignee", "accountId"]),
       labels: extract_labels(fields["labels"]),
       blocked_by: extract_blockers(fields["issuelinks"]),
