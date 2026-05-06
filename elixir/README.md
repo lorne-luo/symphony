@@ -216,6 +216,39 @@ actively running subagents, which is very useful during development.
 Launch `codex` in your repo, give it the URL to the Symphony repo, and ask it to set things up for
 you.
 
+## Using Claude Code instead of Codex
+
+Symphony can run Claude Code as the coding agent instead of Codex, via a Python shim that speaks the Codex app-server protocol.
+
+### Setup
+
+1. Install the shim:
+   ```bash
+   pip install -e priv/claude_app_server
+   ```
+
+2. Install Claude Code CLI:
+   ```bash
+   npm install -g @anthropic-ai/claude-code
+   ```
+
+3. Set environment variables:
+   ```bash
+   export ANTHROPIC_API_KEY=your-key
+   ```
+
+4. Configure Symphony (`config/settings.yaml` or environment):
+   ```yaml
+   app_server:
+     kind: claude_code
+     command: claude-app-server
+   ```
+
+### Run live e2e test
+```bash
+ANTHROPIC_API_KEY=... mix test --include live_claude test/symphony_elixir/claude_code/e2e_test.exs
+```
+
 ## License
 
 This project is licensed under the [Apache License 2.0](../LICENSE).
