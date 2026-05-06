@@ -52,6 +52,8 @@ defmodule SymphonyElixir.Config.Schema do
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:email, :string)
+      field(:project_key, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -59,9 +61,22 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states, :email, :project_key],
         empty_values: []
       )
+      |> validate_jira_required_fields()
+    end
+
+    defp validate_jira_required_fields(changeset) do
+      case get_field(changeset, :kind) do
+        "jira" ->
+          changeset
+          |> validate_required([:email, :project_key],
+               message: "is required when tracker.kind = \"jira\"")
+
+        _ ->
+          changeset
+      end
     end
   end
 
@@ -368,8 +383,24 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+      | api_key:
+          resolve_secret_setting(
+            settings.tracker.api_key,
+            case settings.tracker.kind do
+              "jira" -> System.get_env("JIRA_API_KEY")
+              _ -> System.get_env("LINEAR_API_KEY")
+            end
+          ),
+        email:
+          resolve_secret_setting(settings.tracker.email, System.get_env("JIRA_EMAIL")),
+        assignee:
+          resolve_secret_setting(
+            settings.tracker.assignee,
+            case settings.tracker.kind do
+              "jira" -> System.get_env("JIRA_ASSIGNEE")
+              _ -> System.get_env("LINEAR_ASSIGNEE")
+            end
+          )
     }
 
     workspace = %{

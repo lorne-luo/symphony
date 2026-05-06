@@ -1050,6 +1050,29 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert settings.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
   end
 
+  test "tracker kind=jira accepts jira-specific fields" do
+    config = %{
+      "tracker" => %{
+        "kind" => "jira",
+        "endpoint" => "https://example.atlassian.net",
+        "email" => "agent@example.com",
+        "api_key" => "secret",
+        "project_key" => "SYM",
+        "active_states" => ["To Do", "In Progress"]
+      }
+    }
+
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.tracker.kind == "jira"
+    assert settings.tracker.project_key == "SYM"
+    assert settings.tracker.email == "agent@example.com"
+  end
+
+  test "tracker kind=jira requires email and project_key" do
+    config = %{"tracker" => %{"kind" => "jira", "api_key" => "x"}}
+    assert {:error, {:invalid_workflow_config, _message}} = Schema.parse(config)
+  end
+
   test "schema resolves sandbox policies from explicit and default workspaces" do
     explicit_policy = %{"type" => "workspaceWrite", "writableRoots" => ["/tmp/explicit"]}
 
