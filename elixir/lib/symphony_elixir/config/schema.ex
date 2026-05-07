@@ -52,6 +52,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:email, :string)
+      field(:project_key, :string)
+      field(:board_id, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -59,9 +62,22 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states, :email, :project_key, :board_id],
         empty_values: []
       )
+      |> validate_jira_required_fields()
+    end
+
+    defp validate_jira_required_fields(changeset) do
+      case get_field(changeset, :kind) do
+        "jira" ->
+          changeset
+          |> validate_required([:email, :project_key],
+               message: "is required when tracker.kind = \"jira\"")
+
+        _ ->
+          changeset
+      end
     end
   end
 
@@ -147,6 +163,30 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
+    end
+  end
+
+  defmodule AppServer do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:kind, :string, default: "codex")
+      field(:command, :string)
+      field(:approval_policy, :string, default: "on-request")
+      field(:thread_sandbox, :string, default: "workspace-write")
+      field(:turn_sandbox_policy, :map, default: %{})
+      field(:max_turns, :integer, default: 6)
+    end
+
+    def changeset(s, attrs) do
+      s
+      |> cast(attrs, [:kind, :command, :approval_policy, :thread_sandbox,
+                      :turn_sandbox_policy, :max_turns], empty_values: [])
+      |> validate_inclusion(:kind, ["codex", "claude_code"],
+           message: "must be \"codex\" or \"claude_code\"")
     end
   end
 
@@ -267,6 +307,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:app_server, AppServer, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
@@ -359,6 +400,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
+    |> cast_embed(:app_server, with: &AppServer.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
@@ -368,8 +410,24 @@ defmodule SymphonyElixir.Config.Schema do
   defp finalize_settings(settings) do
     tracker = %{
       settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+      | api_key:
+          resolve_secret_setting(
+            settings.tracker.api_key,
+            case settings.tracker.kind do
+              "jira" -> System.get_env("JIRA_API_KEY")
+              _ -> System.get_env("LINEAR_API_KEY")
+            end
+          ),
+        email:
+          resolve_secret_setting(settings.tracker.email, System.get_env("JIRA_EMAIL")),
+        assignee:
+          resolve_secret_setting(
+            settings.tracker.assignee,
+            case settings.tracker.kind do
+              "jira" -> System.get_env("JIRA_ASSIGNEE")
+              _ -> System.get_env("LINEAR_ASSIGNEE")
+            end
+          )
     }
 
     workspace = %{
@@ -383,7 +441,20 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    app_server =
+      settings.app_server
+      |> then(fn a ->
+        case a.command do
+          nil when not is_nil(settings.codex.command) ->
+            %{a | command: settings.codex.command,
+                  approval_policy: normalize_keys(settings.codex.approval_policy),
+                  thread_sandbox: settings.codex.thread_sandbox,
+                  turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)}
+          _ -> a
+        end
+      end)
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, app_server: app_server}
   end
 
   defp normalize_keys(value) when is_map(value) do

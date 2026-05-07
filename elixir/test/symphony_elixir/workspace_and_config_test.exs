@@ -1050,6 +1050,29 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert settings.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
   end
 
+  test "tracker kind=jira accepts jira-specific fields" do
+    config = %{
+      "tracker" => %{
+        "kind" => "jira",
+        "endpoint" => "https://example.atlassian.net",
+        "email" => "agent@example.com",
+        "api_key" => "secret",
+        "project_key" => "SYM",
+        "active_states" => ["To Do", "In Progress"]
+      }
+    }
+
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.tracker.kind == "jira"
+    assert settings.tracker.project_key == "SYM"
+    assert settings.tracker.email == "agent@example.com"
+  end
+
+  test "tracker kind=jira requires email and project_key" do
+    config = %{"tracker" => %{"kind" => "jira", "api_key" => "x"}}
+    assert {:error, {:invalid_workflow_config, _message}} = Schema.parse(config)
+  end
+
   test "schema resolves sandbox policies from explicit and default workspaces" do
     explicit_policy = %{"type" => "workspaceWrite", "writableRoots" => ["/tmp/explicit"]}
 
@@ -1163,6 +1186,30 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "app_server config defaults to codex kind" do
+    config = %{}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.kind == "codex"
+  end
+
+  test "app_server config kind=claude_code accepted" do
+    config = %{"app_server" => %{"kind" => "claude_code", "command" => "claude-app-server"}}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.kind == "claude_code"
+    assert settings.app_server.command == "claude-app-server"
+  end
+
+  test "app_server config rejects unknown kind" do
+    config = %{"app_server" => %{"kind" => "gpt"}}
+    assert {:error, _} = Schema.parse(config)
+  end
+
+  test "legacy codex.command merges into app_server.command when app_server.command is nil" do
+    config = %{"codex" => %{"command" => "codex app-server"}}
+    assert {:ok, settings} = Schema.parse(config)
+    assert settings.app_server.command == "codex app-server"
   end
 
   test "path safety returns errors for invalid path segments" do

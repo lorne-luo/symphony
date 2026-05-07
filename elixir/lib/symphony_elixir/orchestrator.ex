@@ -109,8 +109,16 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info(:run_poll_cycle, state) do
     state = refresh_runtime_config(state)
     state = maybe_dispatch(state)
-    state = schedule_tick(state, state.poll_interval_ms)
-    state = %{state | poll_check_in_progress: false}
+    state =
+      if once_mode?() do
+        Logger.info("--once mode: skipping next poll after first cycle")
+        state = %{state | poll_check_in_progress: false}
+        maybe_shutdown_if_once_done(state)
+        state
+      else
+        state = schedule_tick(state, state.poll_interval_ms)
+        %{state | poll_check_in_progress: false}
+      end
 
     notify_dashboard()
     {:noreply, state}
@@ -130,34 +138,40 @@ defmodule SymphonyElixir.Orchestrator do
         session_id = running_entry_session_id(running_entry)
 
         state =
-          case reason do
-            :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+          if once_mode?() do
+            Logger.info("Agent task finished (--once mode, no retry) for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
+            complete_issue(state, issue_id)
+          else
+            case reason do
+              :normal ->
+                Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
-              state
-              |> complete_issue(issue_id)
-              |> schedule_issue_retry(issue_id, 1, %{
-                identifier: running_entry.identifier,
-                delay_type: :continuation,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+                state
+                |> complete_issue(issue_id)
+                |> schedule_issue_retry(issue_id, 1, %{
+                  identifier: running_entry.identifier,
+                  delay_type: :continuation,
+                  worker_host: Map.get(running_entry, :worker_host),
+                  workspace_path: Map.get(running_entry, :workspace_path)
+                })
 
-            _ ->
-              Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
+              _ ->
+                Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
-              next_attempt = next_retry_attempt_from_running(running_entry)
+                next_attempt = next_retry_attempt_from_running(running_entry)
 
-              schedule_issue_retry(state, issue_id, next_attempt, %{
-                identifier: running_entry.identifier,
-                error: "agent exited: #{inspect(reason)}",
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+                schedule_issue_retry(state, issue_id, next_attempt, %{
+                  identifier: running_entry.identifier,
+                  error: "agent exited: #{inspect(reason)}",
+                  worker_host: Map.get(running_entry, :worker_host),
+                  workspace_path: Map.get(running_entry, :workspace_path)
+                })
+            end
           end
 
         Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
 
+        state = maybe_shutdown_if_once_done(state)
         notify_dashboard()
         {:noreply, state}
     end
@@ -235,6 +249,18 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, :missing_linear_project_slug} ->
         Logger.error("Linear project slug missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_jira_api_token} ->
+        Logger.error("Jira API token missing; set JIRA_API_KEY env var")
+        state
+
+      {:error, :missing_jira_email} ->
+        Logger.error("Jira email missing; set JIRA_EMAIL env var")
+        state
+
+      {:error, :missing_jira_project_key} ->
+        Logger.error("Jira project key missing in WORKFLOW.md")
         state
 
       {:error, :missing_tracker_kind} ->
@@ -1652,4 +1678,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp integer_like(_value), do: nil
+
+  defp once_mode? do
+    Application.get_env(:symphony_elixir, :once_mode, false) == true
+  end
+
+  defp maybe_shutdown_if_once_done(%State{running: running, retry_attempts: retries} = state) do
+    if once_mode?() and map_size(running) == 0 and map_size(retries) == 0 do
+      Logger.info("--once mode: all agents finished, shutting down")
+      System.stop(0)
+    end
+    state
+  end
 end
