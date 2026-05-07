@@ -7,18 +7,32 @@ import uuid
 
 from .protocol import parse_request, encode_response, encode_notification, JsonRpcError
 from .session import SessionRegistry
-from .events import (
-    agent_message_params, function_call_params,
-    function_call_output_params, turn_complete_params
-)
 
 CLAUDE_COMMAND = "claude"
+
+
+def _extract_prompt(params: dict) -> str:
+    raw = params.get("input")
+    if isinstance(raw, list):
+        parts = []
+        for block in raw:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        if parts:
+            return "\n".join(parts)
+    if isinstance(raw, str):
+        return raw
+    fallback = params.get("prompt")
+    return fallback if isinstance(fallback, str) else ""
 
 
 async def dispatch(request: dict, registry: SessionRegistry, emit) -> None:
     req_id = request.get("id")
     method = request.get("method", "")
     params = request.get("params") or {}
+    is_notification = req_id is None
 
     try:
         if method == "initialize":
@@ -27,57 +41,85 @@ async def dispatch(request: dict, registry: SessionRegistry, emit) -> None:
                 "capabilities": {},
             }))
 
+        elif method == "initialized":
+            return
+
         elif method == "thread/start":
-            workspace = params.get("workspace") or params.get("cwd") or "/tmp"
+            workspace = params.get("cwd") or params.get("workspace") or "/tmp"
             command = params.get("command") or CLAUDE_COMMAND
             tid = registry.create(workspace=workspace, command=command)
-            await emit(encode_response(id=req_id, result={"thread_id": tid}))
+            await emit(encode_response(id=req_id, result={"thread": {"id": tid}}))
 
         elif method == "turn/start":
-            tid = params.get("thread_id", "")
-            turn_id = params.get("turn_id") or str(uuid.uuid4())
-            prompt = params.get("prompt", "")
+            tid = params.get("threadId") or params.get("thread_id") or ""
+            turn_id = params.get("turnId") or params.get("turn_id") or str(uuid.uuid4())
+            prompt = _extract_prompt(params)
+
             session = registry.get(tid)
             if session is None:
                 await emit(encode_response(id=req_id,
                     error=JsonRpcError(code=-32600, message=f"unknown thread_id: {tid}")))
                 return
 
-            async for event in session.run_turn(prompt):
-                ev_type = event.get("type")
-                ev_params = None
-                if ev_type == "assistant" and event.get("content"):
-                    for block in event["content"]:
-                        if block.get("type") == "text":
-                            ev_params = agent_message_params(
-                                block["text"], tid, turn_id)
-                        elif block.get("type") == "tool_use":
-                            ev_params = function_call_params(
-                                block["name"], block["id"],
-                                block.get("input", {}), tid, turn_id)
-                elif ev_type == "result":
-                    session._session_id = event.get("session_id")
-                    ev_params = turn_complete_params(tid, turn_id,
-                        result=event.get("subtype", "success"))
-                if ev_params:
-                    await emit(encode_notification("session/event", ev_params))
+            await emit(encode_response(id=req_id, result={"turn": {"id": turn_id}}))
 
-            await emit(encode_response(id=req_id,
-                result={"turn_id": turn_id, "session_id": tid}))
+            failure: str | None = None
+            try:
+                async for event in session.run_turn(prompt):
+                    ev_type = event.get("type")
+                    if ev_type == "assistant":
+                        for block in event.get("content") or []:
+                            btype = block.get("type")
+                            if btype == "text":
+                                await emit(encode_notification("agent/message", {
+                                    "threadId": tid,
+                                    "turnId": turn_id,
+                                    "text": block.get("text", ""),
+                                }))
+                            elif btype == "tool_use":
+                                await emit(encode_notification("agent/tool_call", {
+                                    "threadId": tid,
+                                    "turnId": turn_id,
+                                    "name": block.get("name", ""),
+                                    "callId": block.get("id", ""),
+                                    "arguments": block.get("input", {}),
+                                }))
+                    elif ev_type == "result":
+                        session._session_id = event.get("session_id")
+                        if event.get("subtype") not in (None, "success"):
+                            failure = event.get("subtype")
+            except Exception as exc:
+                failure = str(exc)
+
+            if failure is None:
+                await emit(encode_notification("turn/completed", {
+                    "threadId": tid,
+                    "turnId": turn_id,
+                }))
+            else:
+                await emit(encode_notification("turn/failed", {
+                    "threadId": tid,
+                    "turnId": turn_id,
+                    "error": failure,
+                }))
 
         elif method == "shutdown":
-            tid = params.get("thread_id")
+            tid = params.get("threadId") or params.get("thread_id")
             if tid:
                 registry.remove(tid)
             await emit(encode_response(id=req_id, result={}))
+
+        elif is_notification:
+            return
 
         else:
             await emit(encode_response(id=req_id,
                 error=JsonRpcError(code=-32601, message=f"method not found: {method}")))
 
     except Exception as e:
-        await emit(encode_response(id=req_id,
-            error=JsonRpcError(code=-32000, message=str(e))))
+        if not is_notification:
+            await emit(encode_response(id=req_id,
+                error=JsonRpcError(code=-32000, message=str(e))))
 
 
 async def _run() -> int:

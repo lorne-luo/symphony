@@ -55,7 +55,12 @@ defmodule SymphonyElixir.Jira.Client do
             normalized
             |> Enum.map_join(" OR ", fn s -> ~s(status = "#{s}") end)
 
-          jql = "project = \"#{tracker.project_key}\" AND (#{status_clause}) ORDER BY created ASC"
+          assignee_clause =
+            if is_binary(tracker.assignee) and tracker.assignee != "",
+              do: " AND assignee = \"#{tracker.assignee}\"",
+              else: ""
+
+          jql = "project = \"#{tracker.project_key}\" AND (#{status_clause})#{assignee_clause} ORDER BY created ASC"
           do_fetch_all(jql, 0, [])
       end
     end
@@ -80,9 +85,16 @@ defmodule SymphonyElixir.Jira.Client do
             {:error, :missing_jira_email}
 
           true ->
-            keys_clause = ids |> Enum.map_join(", ", fn id -> ~s("#{id}") end)
-            jql = "issueKey IN (#{keys_clause}) ORDER BY created ASC"
-            do_fetch_all(jql, 0, [])
+            results =
+              Enum.map(ids, fn id ->
+                path = "/rest/api/3/issue/#{id}?fields=#{@search_fields}"
+                case do_request(:get, path, nil, []) do
+                  {:ok, issue} -> normalize_issue(issue)
+                  _ -> nil
+                end
+              end)
+              |> Enum.reject(&is_nil/1)
+            {:ok, results}
         end
     end
   end
@@ -97,14 +109,26 @@ defmodule SymphonyElixir.Jira.Client do
   def normalize_issue_for_test(issue) when is_map(issue), do: normalize_issue(issue)
 
   defp do_fetch_all(jql, start_at, acc) do
-    params = %{
-      jql: jql,
-      startAt: start_at,
-      maxResults: @issue_page_size,
-      fields: @search_fields
-    }
+    tracker = settings().tracker
 
-    path = "/rest/api/3/search?" <> URI.encode_query(params)
+    path =
+      if is_binary(tracker.board_id) and tracker.board_id != "" do
+        params = %{
+          jql: jql,
+          startAt: start_at,
+          maxResults: @issue_page_size,
+          fields: @search_fields
+        }
+        "/rest/agile/1.0/board/#{tracker.board_id}/issue?" <> URI.encode_query(params)
+      else
+        params = %{
+          jql: jql,
+          startAt: start_at,
+          maxResults: @issue_page_size,
+          fields: @search_fields
+        }
+        "/rest/api/3/search?" <> URI.encode_query(params)
+      end
 
     case do_request(:get, path, nil, []) do
       {:ok, %{"issues" => issues, "total" => total}} when is_list(issues) ->

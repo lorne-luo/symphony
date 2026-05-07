@@ -36,7 +36,7 @@ class Session:
 
     def _build_command(self, prompt: str) -> list[str]:
         parts = [self.command, "-p", prompt, "--output-format", "stream-json",
-                 "--permission-mode", "acceptEdits"]
+                 "--verbose", "--permission-mode", "acceptEdits"]
         if self._session_id:
             parts += ["--resume", self._session_id]
         return parts

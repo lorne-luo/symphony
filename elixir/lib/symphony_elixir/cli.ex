@@ -3,10 +3,12 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
+  require Logger
+
   alias SymphonyElixir.LogFile
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer, once: :boolean]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
@@ -35,14 +37,16 @@ defmodule SymphonyElixir.CLI do
       {opts, [], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
+             :ok <- maybe_set_server_port(opts, deps),
+             :ok <- maybe_set_once_mode(opts) do
           run(Path.expand("WORKFLOW.md"), deps)
         end
 
       {opts, [workflow_path], []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
+             :ok <- maybe_set_server_port(opts, deps),
+             :ok <- maybe_set_once_mode(opts) do
           run(workflow_path, deps)
         end
 
@@ -72,7 +76,14 @@ defmodule SymphonyElixir.CLI do
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [--once] [path-to-WORKFLOW.md]"
+  end
+
+  defp maybe_set_once_mode(opts) do
+    if Keyword.get(opts, :once, false) do
+      Application.put_env(:symphony_elixir, :once_mode, true)
+    end
+    :ok
   end
 
   @spec runtime_deps() :: deps()
@@ -181,6 +192,8 @@ defmodule SymphonyElixir.CLI do
 
         receive do
           {:DOWN, ^ref, :process, ^pid, reason} ->
+            Logger.flush()
+
             case reason do
               :normal -> System.halt(0)
               _ -> System.halt(1)

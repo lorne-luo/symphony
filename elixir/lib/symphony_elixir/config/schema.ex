@@ -54,6 +54,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
       field(:email, :string)
       field(:project_key, :string)
+      field(:board_id, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -61,7 +62,7 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states, :email, :project_key],
+        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states, :email, :project_key, :board_id],
         empty_values: []
       )
       |> validate_jira_required_fields()

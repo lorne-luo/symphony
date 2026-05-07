@@ -1,57 +1,45 @@
 ---
 tracker:
-  kind: linear
-  project_slug: "symphony-0c79b11b75ea"
+  kind: jira
+  endpoint: "https://svavacapital.atlassian.net"
+  project_key: "AP"
+  board_id: "461"
+  email: $JIRA_EMAIL
+  api_key: $JIRA_API_KEY
+  assignee: $JIRA_ASSIGNEE
   active_states:
-    - Todo
-    - In Progress
-    - Merging
-    - Rework
+    - "To Do"
+    - "Kick Off"
+    - "Working on It"
   terminal_states:
-    - Closed
-    - Cancelled
-    - Canceled
-    - Duplicate
-    - Done
+    - "Done"
+    - "Cancelled"
+
 polling:
-  interval_ms: 5000
+  interval_ms: 30000
+
 workspace:
-  root: ~/code/symphony-workspaces
+  root: ~/symphony-workspaces
+
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/openai/symphony .
-    if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
-    fi
-  before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
+    echo "Workspace ready: $(pwd)"
+
+app_server:
+  kind: claude_code
+  command: claude-app-server
+
 agent:
-  max_concurrent_agents: 10
-  max_turns: 20
-codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
-  approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy:
-    type: workspaceWrite
+  max_concurrent_agents: 1
+  max_turns: 5
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}`
-
-{% if attempt %}
-Continuation context:
-
-- This is retry attempt #{{ attempt }} because the ticket is still in an active state.
-- Resume from the current workspace state instead of restarting from scratch.
-- Do not repeat already-completed investigation or validation unless needed for new code changes.
-- Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
-  {% endif %}
+You are doing a read-only analysis of Jira issue `{{ issue.identifier }}`.
 
 Issue context:
 Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
-Labels: {{ issue.labels }}
 URL: {{ issue.url }}
 
 Description:
@@ -61,17 +49,25 @@ Description:
 No description provided.
 {% endif %}
 
-Instructions:
+## Your task
 
-1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
-2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
-3. Final message must report completed actions and blockers only. Do not include "next steps for user".
+Analyze the issue above and write a file called `solution.md` in the current working directory.
 
-Work only in the provided repository copy. Do not touch any other path.
+`solution.md` must contain:
+1. **Summary** — one paragraph restating the problem in your own words
+2. **Root cause / context** — what is likely causing this or what background is needed
+3. **Proposed solution** — concrete steps to implement the fix or feature
+4. **Open questions** — anything unclear that would need human input before proceeding
 
-## Prerequisite: Linear MCP or `linear_graphql` tool is available
+## Hard constraints
 
-The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
+- Do NOT post any comments to Jira
+- Do NOT transition the issue state
+- Do NOT push any code or create any PRs
+- Do NOT clone any repository
+- Write only `solution.md` in the workspace directory, then stop
+
+When `solution.md` is written, print "DONE: solution.md written" and stop.
 
 ## Default posture
 
