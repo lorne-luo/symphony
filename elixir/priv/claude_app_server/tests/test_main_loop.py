@@ -22,7 +22,20 @@ async def test_thread_start():
     await dispatch({"id": 2, "method": "thread/start",
                     "params": {"workspace": "/tmp"}}, registry, emit)
     assert len(out) == 1
-    assert "thread_id" in out[0]["result"]
+    assert "thread" in out[0]["result"]
+    assert "id" in out[0]["result"]["thread"]
+
+
+@pytest.mark.asyncio
+async def test_turn_start_unknown_thread():
+    registry = SessionRegistry()
+    out = []
+    async def emit(line): out.append(json.loads(line))
+    await dispatch({"id": 3, "method": "turn/start",
+                    "params": {"threadId": "no-such-id", "input": []}}, registry, emit)
+    assert len(out) == 1
+    assert "error" in out[0]
+    assert "unknown thread_id" in out[0]["error"]["message"]
 
 
 @pytest.mark.asyncio

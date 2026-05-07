@@ -22,7 +22,20 @@ defmodule SymphonyElixir.Jira.Adapter do
   @impl true
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_key, body) when is_binary(issue_key) and is_binary(body) do
-    case client_module().request(:post, "/rest/api/3/issue/#{issue_key}/comment", %{body: body}) do
+    adf_body = %{
+      "body" => %{
+        "type" => "doc",
+        "version" => 1,
+        "content" => [
+          %{
+            "type" => "paragraph",
+            "content" => [%{"type" => "text", "text" => body}]
+          }
+        ]
+      }
+    }
+
+    case client_module().request(:post, "/rest/api/3/issue/#{issue_key}/comment", adf_body) do
       {:ok, _response} -> :ok
       {:error, reason} -> {:error, reason}
     end
